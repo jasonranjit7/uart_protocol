@@ -7,7 +7,7 @@ module uart_tx(input clk,
                output reg tx
               );
   wire tx_en;
-  reg [3:0] bit_cnt;
+  reg [2:0] bit_cnt;
   reg [7:0] data_frame;
   
   baud_rate_gen baud(.clk(clk),
@@ -25,7 +25,7 @@ module uart_tx(input clk,
   
   //bit counter
   always@(posedge clk) begin
-    if(rst | state == IDLE)
+    if(rst | state == IDLE|state==START)
       bit_cnt <= 0;
     else if(state == DATA && tx_en)
       bit_cnt <= bit_cnt + 1'b1;
@@ -35,7 +35,7 @@ module uart_tx(input clk,
   always@(posedge clk) begin
     if(rst | state == IDLE)
       data_frame <= data;
-    else if(state == DATA && bit_cnt!=4'd8 && tx_en)
+    else if(state == DATA && tx_en)
       data_frame <= {1'b1,data_frame[7:1]};
   end
       
@@ -51,8 +51,6 @@ module uart_tx(input clk,
   //transition logic
   always@(*) begin
     nxt_state = state;
-    tx = 1'b1;
-    done = 0;
     case(state)
       IDLE: begin
         if(ready)
@@ -67,13 +65,8 @@ module uart_tx(input clk,
         else nxt_state = START;
       end
       DATA: begin
-        if(tx_en) begin
-          if(bit_cnt == 4'd8) begin
+        if(tx_en && bit_cnt == 3'd7) begin
             nxt_state = STOP;
-          end
-          else begin
-            nxt_state = DATA;
-          end
         end
         else nxt_state = DATA;
       end
@@ -86,21 +79,25 @@ module uart_tx(input clk,
   
   //output logic
   always@(posedge clk) begin
-    if(rst)
-        tx <= 1;
-    else if(state == START)
-        tx <= 0;
-    else if(state == DATA && tx_en) begin
-      tx <= data_frame[0];
-      if(bit_cnt == 4'd8)
-        done <= 1'b1;
-    end     
-    else if(state == STOP && tx_en) begin
-      tx <= 1;
-      done <= 1;
+    if(rst) begin
+      tx <= 1'b1;
+      done<=0;
     end
-    else if(state == IDLE)
-      done <= 0;
+    else begin
+      done<=0;
+      case(state)
+        IDLE: tx<=1'b1;
+        START: tx<=1'b0;
+        DATA: tx<=data_frame[0];
+        STOP: begin
+          tx<=1'b1;
+          if(tx_en)
+            done<=1'b1;
+        end
+        default: tx<=1'b1;
+      endcase
+    end
+      
   end
       
             
@@ -111,4 +108,3 @@ endmodule
   
   
   
-
