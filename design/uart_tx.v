@@ -1,110 +1,141 @@
-`include "baud_rate_gen.v"
-module uart_tx(input clk,
+module uart_rx(input clk,
                input rst,
-               input ready,
-               input [7:0] data,
+               input rx,
                output reg done,
-               output reg tx
+               output reg [7:0] data
               );
-  wire tx_en;
-  reg [2:0] bit_cnt;
-  reg [7:0] data_frame;
+  
+  wire rx_en;
   
   baud_rate_gen baud(.clk(clk),
                 .rst(rst),
-                .tx_en(tx_en),
-                .rx_en()
+                .tx_en(),
+                .rx_en(rx_en)
                );
   
   reg [1:0] state, nxt_state;
-  
-  localparam IDLE = 2'd0,
+  localparam IDLE = 2'b00,
   			 START = 2'b01,
   			 DATA = 2'b10,
   			 STOP = 2'b11;
   
-  //bit counter
-  always@(posedge clk) begin
-    if(rst | state == IDLE|state==START)
-      bit_cnt <= 0;
-    else if(state == DATA && tx_en)
-      bit_cnt <= bit_cnt + 1'b1;
-  end
-  
-  //shift reg
-  always@(posedge clk) begin
-    if(rst | state == IDLE)
-      data_frame <= data;
-    else if(state == DATA && tx_en)
-      data_frame <= {1'b1,data_frame[7:1]};
-  end
-      
+  reg [7:0] rx_data;
+  reg [2:0] bit_cnt;
+  reg [3:0] sample_cnt;
+  reg shift;
   
   //state register
   always@(posedge clk) begin
     if(rst)
-      state <= IDLE;
+      state<=IDLE;
     else
-      state <= nxt_state;
+      state<=nxt_state;
   end
+  
+  //counters
+  always@(posedge clk) begin
+    if(rst||state==IDLE) begin
+      sample_cnt<=0;
+      bit_cnt<=0;
+    end
+    else begin
+      if(sample_cnt==15 && rx_en) begin
+        sample_cnt<=0;
+        if(state == DATA)
+          bit_cnt<=bit_cnt+1'b1;
+      end
+      else if((state == START || state == DATA||state==STOP) && rx_en) begin
+        sample_cnt<=sample_cnt+1'b1;
+      end
+    end
+  end
+  
+  //shift register
+  always@(posedge clk) begin
+    if(rst)
+      rx_data<=0;
+    else if(shift) 
+      rx_data[bit_cnt]<=rx;
+  end
+        
   
   //transition logic
   always@(*) begin
+    shift = 0;
     nxt_state = state;
     case(state)
       IDLE: begin
-        if(ready)
+        if(!rx)
           nxt_state = START;
         else
           nxt_state = IDLE;
       end
       START: begin
-        if(tx_en) begin
-          nxt_state = DATA;
+        if(rx_en) begin
+          if(sample_cnt == 7) begin
+            if(rx)
+              nxt_state = IDLE;
+            else 
+              nxt_state = START;
+          end
+          else if(sample_cnt != 15)
+            nxt_state = START;
+          else
+            nxt_state = DATA;
         end
-        else nxt_state = START;
       end
       DATA: begin
-        if(tx_en && bit_cnt == 3'd7) begin
-            nxt_state = STOP;
+        if(rx_en) begin
+          if(sample_cnt == 15) begin
+            shift = 1;
+            if(bit_cnt == 7)
+              nxt_state = STOP;
+            else
+              nxt_state = DATA;
+          end
+          else
+            nxt_state = DATA;
         end
-        else nxt_state = DATA;
       end
       STOP: begin
-        if(tx_en)
-          nxt_state = IDLE;
+        if(rx_en) begin
+          if(sample_cnt==15)
+            nxt_state = IDLE;
+          else
+            nxt_state = STOP;
+        end
       end
+      default:
+        nxt_state = IDLE;
     endcase
   end
   
   //output logic
   always@(posedge clk) begin
     if(rst) begin
-      tx <= 1'b1;
       done<=0;
+      data<=0;
     end
-    else begin
-      done<=0;
-      case(state)
-        IDLE: tx<=1'b1;
-        START: tx<=1'b0;
-        DATA: tx<=data_frame[0];
-        STOP: begin
-          tx<=1'b1;
-          if(tx_en)
-            done<=1'b1;
-        end
-        default: tx<=1'b1;
-      endcase
-    end
-      
+    else
+      begin
+        case(state)
+          IDLE: begin
+            done<=0;
+          end
+          START: done<=0;
+          STOP: begin
+            if(sample_cnt==15 & rx & rx_en) begin
+              done<=1;
+              data<=rx_data;
+            end
+          end
+          default: begin
+            done<=0;
+          end
+        endcase
+      end
   end
-      
-            
-        
-        
+              
+  
   
 endmodule
-  
-  
-  
