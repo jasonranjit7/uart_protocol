@@ -15,70 +15,127 @@ module uart_rx(input clk,
   
   reg [1:0] state, nxt_state;
   localparam IDLE = 2'b00,
-  			 DATA = 2'b01,
-  			 STOP = 2'b10;
+  			 START = 2'b01,
+  			 DATA = 2'b10,
+  			 STOP = 2'b11;
   
-  reg [7:0] tx_data;
+  reg [7:0] rx_data;
   reg [2:0] bit_cnt;
-  
-  //data register
-  always@(posedge clk) begin
-    if(rst) begin
-      tx_data <= 0;
-      done <= 0;
-    end
-    else if(rx_en && state == DATA)
-      tx_data[bit_cnt] <= rx;
-    else if(rx_en && state == STOP) begin
-      if(rx) begin
-        data <= tx_data;
-        done <= 1'b1;
-      end
-      else done<= 0;
-    end
-    else
-      done <= 0;
-  end
-  
-  //bit counter
-  always@(posedge clk) begin
-    if(rst | state == IDLE)
-      bit_cnt <= 0;
-    else if(state == DATA && rx_en)
-      bit_cnt <= bit_cnt + 1'b1;
-  end
+  reg [3:0] sample_cnt;
+  reg shift;
   
   //state register
   always@(posedge clk) begin
     if(rst)
-      state <= IDLE;
+      state<=IDLE;
     else
-      state <= nxt_state;
+      state<=nxt_state;
   end
   
-  //state transition
+  //counters
+  always@(posedge clk) begin
+    if(rst||state==IDLE) begin
+      sample_cnt<=0;
+      bit_cnt<=0;
+    end
+    else begin
+      if(sample_cnt==15 && rx_en) begin
+        sample_cnt<=0;
+        if(state == DATA)
+          bit_cnt<=bit_cnt+1'b1;
+      end
+      else if((state == START || state == DATA||state==STOP) && rx_en) begin
+        sample_cnt<=sample_cnt+1'b1;
+      end
+    end
+  end
+  
+  //shift register
+  always@(posedge clk) begin
+    if(rst)
+      rx_data<=0;
+    else if(shift) 
+      rx_data[bit_cnt]<=rx;
+  end
+        
+  
+  //transition logic
   always@(*) begin
+    shift = 0;
     nxt_state = state;
-    if(rx_en)
-      case(state)
-        IDLE: begin
-          if(!rx)
-            nxt_state = DATA;
+    case(state)
+      IDLE: begin
+        if(!rx)
+          nxt_state = START;
+        else
+          nxt_state = IDLE;
+      end
+      START: begin
+        if(rx_en) begin
+          if(sample_cnt == 7) begin
+            if(rx)
+              nxt_state = IDLE;
+            else 
+              nxt_state = START;
+          end
+          else if(sample_cnt != 15)
+            nxt_state = START;
           else
-            nxt_state = IDLE;
-        end
-        DATA: begin
-          if(bit_cnt != 3'd7)
             nxt_state = DATA;
+        end
+      end
+      DATA: begin
+        if(rx_en) begin
+          if(sample_cnt == 15) begin
+            shift = 1;
+            if(bit_cnt == 7)
+              nxt_state = STOP;
+            else
+              nxt_state = DATA;
+          end
+          else
+            nxt_state = DATA;
+        end
+      end
+      STOP: begin
+        if(rx_en) begin
+          if(sample_cnt==15)
+            nxt_state = IDLE;
           else
             nxt_state = STOP;
         end
-        STOP: begin
-          nxt_state = IDLE;
-        end
-        default: nxt_state = IDLE;
-      endcase
+      end
+      default:
+        nxt_state = IDLE;
+    endcase
   end
   
+  //output logic
+  always@(posedge clk) begin
+    if(rst) begin
+      done<=0;
+      data<=0;
+    end
+    else
+      begin
+        case(state)
+          IDLE: begin
+            done<=0;
+          end
+          START: done<=0;
+          STOP: begin
+            if(sample_cnt==15 & rx & rx_en) begin
+              done<=1;
+              data<=rx_data;
+            end
+          end
+          default: begin
+            done<=0;
+          end
+        endcase
+      end
+  end
+              
+  
+  
 endmodule
-          
